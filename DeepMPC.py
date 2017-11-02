@@ -1420,15 +1420,11 @@ with tf.Session() as sess:
     tf.clip_by_value(layer[-1],angles_min, angles_max)
 
 
-K_steps = data[:50042,2]
-K_sim = data_k[:50042,2]
-"""
-x = np.linspace(0,10,num=542)
-K_steps = -0.1 + 0.1*np.sin(x)
-K_steps_mean = np.reshape(K_steps.mean(axis=0),[1,])
-K_steps_std = np.reshape(K_steps.std(axis=0),[1,])
-K_steps = (K_steps - K_steps_mean)/K_steps_std
-"""
+
+x = np.linspace(0,7,30000)
+K_sim = -.075 + .175*np.sin(0.5*x**2)
+K_steps = (K_sim-K_sim.mean())/K_sim.std()
+
 #%%
 
 if not reuse_model:
@@ -3124,6 +3120,9 @@ def control_pred(Ks, pre_learning=True):
         #                                 data_mean[num_states:]))
         #data_std_ctrl = np.concatenate((data_std[:num_states-1],[K_steps_std],
         #                                        data_std[num_states:]))
+        res_past = 0.0
+        alpha_past = 0
+        
         init_states = np.zeros([2*steps_phase_crtl,1,
                      (2*delay + 2 + steps_phase_crtl)*num_parameters])
         init_angles = np.zeros([2*steps_phase_crtl,1,
@@ -3135,13 +3134,6 @@ def control_pred(Ks, pre_learning=True):
             
             alpha = alpha_norm*K_u_std[1:5]+K_u_mean[1:5]
             
-            if t == 0:
-                print('### Compare Angles ###')
-                print(alpha[0,0], d_dataset[0,3])
-                print(alpha[0,1], d_dataset[0,4])
-                print(alpha[0,2], d_dataset[0,5])
-                print(alpha[0,3], d_dataset[0,6])
-                print('######################')
             
             (_,states) = laser_simulation(uvt, alpha[0,0], alpha[0,1], 
                                           alpha[0,2], alpha[0,3], K_sim[t])
@@ -3150,7 +3142,7 @@ def control_pred(Ks, pre_learning=True):
             z_vae = vae.transform(np.reshape(states,[1,num_parameters]))
             K_vae = (z_vae - z_mu_mean)/z_mu_std
             #K_vae = vae.transform(np.reshape(states,[1,num_parameters-1]))k_VAE
-            print('K-values: %s vs %s' % (K_vae[:,k_VAE_index], d_dataset[t,2]))
+            print('K-values: %s vs %s' % (K_vae[:,k_VAE_index], Ks[t]))
             # normalize states
             states = (states - data_mean_ctrl) / data_std_ctrl
             #states = np.concatenate((states[:num_states-1],
@@ -3192,17 +3184,14 @@ def control_pred(Ks, pre_learning=True):
             length = (len(Ks)-time_span)//steps_phase_crtl
         Kvals = np.zeros([length, steps_phase_crtl])
         Kvals_sim = np.zeros([length, steps_phase_crtl])
-        Kvals_sim_n = np.zeros([length, steps_phase_crtl])
         for i in range(length):
             Kvals[i,:] = Ks[time_span + i * steps_phase_crtl:
                             time_span + (i + 1) * steps_phase_crtl]
             Kvals_sim[i,:] = K_sim[time_span + i * steps_phase_crtl:
                             time_span + (i + 1) * steps_phase_crtl]
-            Kvals_sim_n[i,:] = k_VAE[time_span + i * steps_phase_crtl:
-                            time_span + (i + 1) * steps_phase_crtl][:,0]
                 
     # for loop to go through the temporarly changing birefringence values
-    for k, K_simulation,K_sim_n, num in zip(Kvals, Kvals_sim, Kvals_sim_n, range(length)):
+    for k, K_simulation, num in zip(Kvals, Kvals_sim, range(length)):
         # if it is not the pre learning step, at first the birefringence value 
         # K will be predicted by using the RNN cell and the before identified 
         # feed_dict. And the K value will be again the input for the 
@@ -3294,59 +3283,6 @@ def control_pred(Ks, pre_learning=True):
         print(step, K_simulation)
         print('########################')
              
-        # Denormalization of the angles
-        for angle, t in zip(angles,range(steps_phase_crtl)):
-            ang = []
-            for a in range(np.size(angle)):
-                # alpha = alpha_inp*data_std + data_mean
-                angle[0][a] = angle[0][a]*data_std[a+num_states] + \
-                              data_mean[a+num_states]
-                #angle[0][a] = angle[0][a]*K_u_std[a+1] + \
-                #              K_u_mean[a+1]
-                ang.append(angle[0][a])
-                
-                    
-            """
-            print('########################')
-            print(step, ks[t])
-            print('Comparison of the angles')
-            print(inp_ctrl[1,0,104:]*data_std[num_states:] + data_mean[num_states:])
-            print(ang[0], ang[1], ang[2], ang[3])
-            print('########################')
-            """
-            # Run simulations using identified angles
-            (_,states) = laser_simulation(uvt, ang[0], ang[1], ang[2], 
-                                          ang[3], K_simulation[t])
-            
-            z_vae = vae.transform(np.reshape(states,[1,num_parameters]))
-            K_vae = (z_vae - z_mu_mean)/z_mu_std
-            
-            print(K_vae[0,k_VAE_index], dec_out[t,2], K_sim_n[t])
-            
-            #pred_K = dec_out[t,2]
-            #calc_K = K_vae[0,k_VAE_index]
-            
-            #if abs(ks[t] - pred_K) > 5:
-            #    print('### Adjustive Control ###')
-            #    alpha_norm = np.vstack(sess.run([layer[-1]],
-            #                        feed_dict={K: np.reshape(ks[t],[1,1])}))[0]
-            #    #ang = map_out*data_std[num_states:]+data_mean[num_states:]
-            #    alpha = alpha_norm*K_u_std[1:5]+K_u_mean[1:5]
-            #    
-            #    (_,states) = laser_simulation(uvt,alpha[0], alpha[1], alpha[2], 
-            #                                  alpha[3], K_simulation[t])
-            #    
-            #    print(ks[t], pred_K)
-            
-            #if (t == steps_phase_crtl-1 and abs(ks[t] - pred_K) <= 5):
-            #    alpha_norm = np.vstack(sess.run([layer[-1]],
-            #                    feed_dict={K: np.reshape(pred_K,[1,1])}))[0]
-            #    alpha = alpha_norm*K_u_std[1:5]+K_u_mean[1:5]
-            #    alpha_inp = (alpha-data_mean[num_states:])/data_std[num_states:]
-            #    print('Alpha_inp in %s: %s' % (t,alpha_inp))
-                
-            laser_states.append(states)
-        
         def prep_laser_states(laser_states):        
             laser_states = np.array(laser_states)
             
@@ -3368,7 +3304,7 @@ def control_pred(Ks, pre_learning=True):
             print(laser_states[:,num_states-1:])
             
             laser_states_true = np.concatenate((laser_states[:,:num_states-num_latent_var],
-                                np.reshape(K_vae[:,k_VAE_index],[steps_phase_crtl,1]),
+                                np.reshape(ks,[steps_phase_crtl,1]),
                                 laser_states[:,num_states-1:]),axis=1)
             # ks instead of K_vae[:,k_VAE_index] 
                 
@@ -3396,17 +3332,70 @@ def control_pred(Ks, pre_learning=True):
             train_writer_cnt_2.add_summary(summary, step)
             print('Error in step %s: %s' % (step, test_err))
             
-            return laser_states_norm, laser_states_norm_K, laser_states_true, test_err
+            return (laser_states_norm, laser_states_norm_K, laser_states_true, 
+                    test_err, K_vae)
         
-        laser_states_norm, laser_states_norm_K, laser_states_true, test_err = \
-        prep_laser_states(laser_states)
+        res_past = 0.0
         
-        if test_err > 1.5:
+        # Denormalization of the angles
+        for angle, t in zip(angles,range(steps_phase_crtl)):
+            ang = []
+            def run_sim(angle, K_simu):
+                for a in range(np.size(angle)):
+                    # alpha = alpha_inp*data_std + data_mean
+                    angle[0][a] = angle[0][a]*data_std[a+num_states] + \
+                                  data_mean[a+num_states]
+                    #angle[0][a] = angle[0][a]*K_u_std[a+1] + \
+                    #              K_u_mean[a+1]
+                    ang.append(angle[0][a])
+                    
+                # Run simulations using identified angles
+                (_,states) = laser_simulation(uvt, ang[0], ang[1], ang[2], 
+                                              ang[3], K_simu)
+                
+                return states
+            
+            states = run_sim(angle, K_simulation[t])
+            
+            res_current = states[0]/states[1]
+            
+            if (t > 0 and res_past - res_current > 0.015):
+                angle = angles[t-1]
+                states_temp = run_sim(angle, K_simulation[t])
+                
+                res_new = states_temp[0]/states_temp[1]
+                
+                if res_new > res_current:
+                    states = states_temp
+                    res_past = res_new
+                    
+            if ((t == 1 or t == steps_phase_crtl - 1) 
+              and res_current - res_past > 0.015):
+                states_temp = run_sim(angle, K_simulation[t-1])
+                
+                res_0 = states_temp[0]/states_temp[1]
+                
+                if res_0 > res_past:
+                    laser_states[0] = states_temp
+                    
+            z_vae = vae.transform(np.reshape(states,[1,num_parameters]))
+            K_vae = (z_vae - z_mu_mean)/z_mu_std
+            
+            print(K_vae[0,k_VAE_index], dec_out[t,2], ks[t])
+                
+            laser_states.append(states)
+            
+            res_past = res_current
+        
+        (laser_states_norm, laser_states_norm_K, laser_states_true, test_err,
+         K_vae) = prep_laser_states(laser_states)
+        
+        if test_err > 1.25:
             print('Adjusting since error is too large')
             laser_states = []
             for t in range(steps_phase_crtl):
                 alpha_norm = np.vstack(sess.run([layer[-1]],
-                                    feed_dict={K: np.reshape(ks[t],[1,1])}))[0]
+                                feed_dict={K: np.reshape(ks[t],[1,1])}))[0]
                 #ang = map_out*data_std[num_states:]+data_mean[num_states:]
                 alpha = alpha_norm*K_u_std[1:5]+K_u_mean[1:5]
                 
@@ -3416,10 +3405,47 @@ def control_pred(Ks, pre_learning=True):
                 
                 (_,states) = laser_simulation(uvt,alpha[0], alpha[1], alpha[2], 
                                               alpha[3], K_simulation[t])
+                
+                res_current = states[0]/states[1]
+            
+                if (t > 0 and res_past - res_current > 0.015):
+                    print('Res_past: %s, Res_current: %s, diff = %s' % (res_past, res_current, res_past - res_current))
+                    angle = alpha_past.copy()
+                    (_, states_temp) = laser_simulation(uvt,angle[0], angle[1],
+                                                        angle[2], angle[3], 
+                                                        K_simulation[t])
+                    
+                    res_new = states_temp[0]/states_temp[1]
+                    
+                    if res_new > res_current:
+                        print('Res_new: %s, Res_current: %s' % (res_new, res_current))
+                        states = states_temp
+                        res_past = res_new
+                        alpha = alpha_past.copy()
+                        
+                if ((t == 1 or t == steps_phase_crtl - 1) 
+                  and res_current - res_past > 0.015):
+                    print('Res_past: %s, Res_current: %s, diff = %s' % (res_past, res_current, res_past - res_current))
+                    (_,states_temp) = laser_simulation(uvt,alpha[0], alpha[1], 
+                                                       alpha[2], alpha[3], 
+                                                       K_simulation[t-1])
+                    
+                    res_0 = states_temp[0]/states_temp[1]
+                    
+                    if res_0 > res_past:
+                        print('Res_past: %s, Res_0: %s' % (res_past, res_0))
+                        laser_states[0] = states_temp
+                        
+                alpha_past = alpha.copy()
+                    
                 laser_states.append(states)
                 
-            laser_states_norm, laser_states_norm_K, laser_states_true, _ = \
-            prep_laser_states(laser_states)
+                if t + 1 < steps_phase_crtl:
+                    z_vae = vae.transform(np.reshape(states,[1,num_parameters]))
+                    K_vae[t+1,:] = (z_vae - z_mu_mean)/z_mu_std
+                
+            (laser_states_norm, laser_states_norm_K, laser_states_true, _, 
+             K_vae) = prep_laser_states(laser_states)
             
             dec_out = np.vstack(sess.run(decoder_outputs.get('decoder_outputs_3'),
                             feed_dict=feed_dict))
