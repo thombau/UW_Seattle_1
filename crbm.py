@@ -2,22 +2,16 @@
 
 For details, see:
 http://www.uoguelph.ca/~gwtaylor/publications/nips2006mhmublv
-Sample data:
-http://www.uoguelph.ca/~gwtaylor/publications/nips2006mhmublv/motion.mat
-
-@author Graham Taylor"""
+"""
 
 import numpy
 import numpy as np
-import matplotlib.pyplot as plt
 import time
 
 import theano
 import theano.tensor as T
 
 from theano.tensor.shared_randomstreams import RandomStreams
-
-from motion import load_data
 
 
 class CRBM(object):
@@ -282,62 +276,9 @@ class CRBM(object):
 
         return recon
 
-    def generate(self, orig_data, orig_history, n_samples, n_gibbs=30):
-        """ Given initialization(s) of visibles and matching history, generate
-        n_samples in future.
 
-        orig_data : n_seq by n_visibles array
-            initialization for first frame
-        orig_history : n_seq by delay * n_visibles array
-            delay-step history
-        n_samples : int
-            number of samples to generate forward
-        n_gibbs : int
-            number of alternating Gibbs steps per iteration"""
-        n_seq = orig_data.shape[0]
-        persistent_vis_chain = theano.shared(orig_data)
-        persistent_history = theano.shared(orig_history)
-
-        #persistent_history = T.matrix('persistent_history')
-
-        [presig_hids, hid_mfs, hid_samples, vis_mfs, vis_samples], updates =  \
-                            theano.scan(crbm.gibbs_vhv,
-                                    outputs_info=[None, None, None, None,
-                                                    persistent_vis_chain],
-                                    non_sequences=persistent_history,
-                                    n_steps=n_gibbs)
-
-        # add to updates the shared variable that takes care of our persistent
-        # chain
-        # initialize next visible with current visible
-        # shift the history one step forward
-        updates.update({persistent_vis_chain: vis_samples[-1],
-                         persistent_history: T.concatenate(
-                             (vis_samples[-1],
-                                 persistent_history[:, :(self.delay - 1) * \
-                                                    self.n_visible],
-                              ), axis=1)})
-        # construct the function that implements our persistent chain.
-        # we generate the "mean field" activations for plotting and the actual
-        # samples for reinitializing the state of our persistent chain
-        sample_fn = theano.function([], [vis_mfs[-1], vis_samples[-1]],
-                            updates=updates,
-                            name='sample_fn')
-
-        #vis_mf, vis_sample = sample_fn()
-        #print orig_data[:,1:5]
-        #print vis_mf[:,1:5]
-        generated_series = np.empty((n_seq, n_samples, self.n_visible))
-        for t in range(n_samples):
-            print ("Generating frame %d" % t)
-            vis_mf, vis_sample = sample_fn()
-            generated_series[:, t, :] = vis_mf
-        return generated_series
-
-
-def train_crbm(learning_rate=1e-3, training_epochs=500,
-             dataset='motion.mat', batch_size=100,
-             n_hidden=20, delay=8):
+def train_crbm(dataset,learning_rate=1e-3, training_epochs=500,
+             batch_size=100, n_hidden=20, delay=6):
     """
     Demonstrate how to train a CRBM.
     This is demonstrated on mocap data.
@@ -356,22 +297,28 @@ def train_crbm(learning_rate=1e-3, training_epochs=500,
     theano_rng = RandomStreams(rng.randint(2 ** 30))
 
     # batchdata is returned as theano shared variable floatX
-    batchdata, seqlen, data_mean, data_std = load_data(dataset)
-
+    seqlen = len(dataset)
+    batchdata = theano.shared(np.asarray(dataset, dtype=theano.config.floatX))
+    
     # compute number of minibatches for training, validation and testing
     n_train_batches = int(batchdata.get_value(borrow=True).shape[0] / batch_size)
     n_dim = batchdata.get_value(borrow=True).shape[1]
+    #print('n_train_batches = ', n_train_batches)
+    #print('n_dim = ', n_dim)
 
     # valid starting indices
     batchdataindex = []
     last = 0
-    for s in seqlen:
+    for s in [seqlen]:
         batchdataindex += range(last + delay, last + s)
         last += s
 
     permindex = np.array(batchdataindex)
     rng.shuffle(permindex)
-
+    #print('batchdataindex = ', batchdataindex)
+    #print('permindex = ', permindex)
+    
+    
     # allocate symbolic variables for the data
     index = T.lvector()    # index to a [mini]batch
     index_hist = T.lvector()  # index to history
@@ -386,17 +333,15 @@ def train_crbm(learning_rate=1e-3, training_epochs=500,
     # (state = hidden layer of chain)
 
     # construct the CRBM class
-    crbm = CRBM(input=x, input_history=x_history, n_visible=n_dim, \
+    crbm = CRBM(input=x, input_history=x_history, n_visible=n_dim,
                 n_hidden=n_hidden, delay=delay, numpy_rng=rng,
                 theano_rng=theano_rng)
-
-    W_vgl = crbm.W.eval()
 
     # get the cost and the gradient corresponding to one step of CD-15
     cost, updates = crbm.get_cost_updates(lr=learning_rate, k=1)
 
     #################################
-    #     Training the CRBM         #
+    #      Training the CRBM        #
     #################################
 
     # the purpose of train_crbm is solely to update the CRBM parameters
@@ -407,7 +352,7 @@ def train_crbm(learning_rate=1e-3, training_epochs=500,
                        batch_size, delay * n_dim))},
            name='train_crbm')
 
-    plotting_time = 0.
+    #plotting_time = 0.
     start_time = time.clock()
 
     # go through training epochs
@@ -422,12 +367,12 @@ def train_crbm(learning_rate=1e-3, training_epochs=500,
             # (i.e. time t) gives a batch_size length array for data
             data_idx = permindex[batch_index * batch_size:(batch_index + 1) \
                                  * batch_size]
-
+            # print('data_idx = ', data_idx)
             # now build a linear index to the frames at each delay tap
             # (i.e. time t-1 to t-delay)
             # gives a batch_size x delay array of indices for history
             hist_idx = np.array([data_idx - n for n in range(1, delay + 1)]).T
-
+            #print('hist_idx = ', hist_idx)
             this_cost = train_crbm(data_idx, hist_idx.ravel())
             #print batch_index, this_cost
             mean_cost += [this_cost]
@@ -440,49 +385,5 @@ def train_crbm(learning_rate=1e-3, training_epochs=500,
 
     print ('Training took %f minutes' % (pretraining_time / 60.))
 
-    return crbm, batchdata, W_vgl
 
-
-if __name__ == '__main__':
-    crbm, batchdata, W_vgl = train_crbm()
-
-    # Generate some sequences (in parallel) from CRBM
-    # Using training data as initialization
-
-    # pick some starting points for each sequence
-    data_idx = np.array([100, 200, 400, 600])
-    orig_data = numpy.asarray(batchdata.get_value(borrow=True)[data_idx],
-                              dtype=theano.config.floatX)
-
-    hist_idx = np.array([data_idx - n for n in range(1, crbm.delay + 1)]).T
-    hist_idx = hist_idx.ravel()
-
-    orig_history = numpy.asarray(
-        batchdata.get_value(borrow=True)[hist_idx].reshape(
-        (len(data_idx), crbm.delay * crbm.n_visible)),
-        dtype=theano.config.floatX)
-
-    generated_series = crbm.generate(orig_data, orig_history, n_samples=10,
-                                     n_gibbs=30)
-    # append initialization
-    generated_series = np.concatenate((orig_history.reshape(len(data_idx),
-                                                            crbm.delay,
-                                                            crbm.n_visible \
-                                                            )[:, ::-1, :],
-                                       generated_series), axis=1)
-
-    bd = batchdata.get_value(borrow=True)
-
-    # plot first dimension of each sequence
-    for i in range(len(generated_series)):
-        # original
-        start = data_idx[i]
-        plt.subplot(len(generated_series), 1, i+1)
-        plt.plot(bd[start - crbm.delay:start + 10 - crbm.delay, 1],
-                 label='true', linestyle=':')
-        plt.plot(generated_series[i, :10, 1], label='predicted',
-                 linestyle='-')
-
-    leg = plt.legend()
-    ltext = leg.get_texts()  # all the text.Text instance in the legend
-    plt.setp(ltext, fontsize=9)
+    return crbm
